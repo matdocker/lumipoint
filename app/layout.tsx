@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { ColorSchemeScript } from "@mantine/core";
-import Providers from "./providers";
+import Providers from "./providers"; // <-- the file above
 
 export const metadata: Metadata = {
   title: "Lumipoint Dashboard",
