@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST="{\"app\\\\page.tsx -> @/components/LumipointDashboard\":{\"id\":\"app\\\\page.tsx -> @/components/LumipointDashboard\",\"files\":[\"static/chunks/_app-pages-browser_components_LumipointDashboard_tsx.js\"]}}"
