@@ -1,9 +1,12 @@
 // server.js
 // One-page Express backend for Lumipoint (Railway-ready)
 
-const express = require("express");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+dotenv.config();
 
+// Configuration
 const PORT = Number(process.env.PORT || 3001);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*"; // set to your vercel domain for stricter CORS
 
