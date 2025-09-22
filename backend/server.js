@@ -42,11 +42,13 @@ function loadState() {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const raw = fs.readFileSync(STATE_FILE, "utf8");
+      console.log("[LOAD] State loaded from file:", raw);
       return JSON.parse(raw);
     }
   } catch (err) {
-    console.error("Failed to load state file:", err);
+    console.error("[LOAD] Failed to load state file:", err);
   }
+  console.log("[LOAD] Using default state");
   return { ...defaultState };
 }
 
@@ -54,8 +56,9 @@ function loadState() {
 function saveState(state) {
   try {
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    console.log("[SAVE] State persisted:", state);
   } catch (err) {
-    console.error("Failed to save state file:", err);
+    console.error("[SAVE] Failed to save state file:", err);
   }
 }
 
@@ -71,22 +74,29 @@ function tickTelemetry() {
   if (Math.random() < 0.05) state.motion = !state.motion;
   state.updatedAt = new Date().toISOString();
   saveState(state);
+  console.log("[TELEMETRY] State updated:", state);
 }
 
 // ---- Routes ----
-app.get("/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.get("/health", (_req, res) => {
+  console.log("[REQ] GET /health");
+  res.json({ ok: true, time: new Date().toISOString() });
+});
 
 app.get("/state", (_req, res) => {
+  console.log("[REQ] GET /state");
   tickTelemetry();
   res.json(state);
 });
 
 app.patch("/state", (req, res) => {
+  console.log("[REQ] PATCH /state with body:", req.body);
   try {
     const { isNightLightMode, brightness, offTimerMs } = req.body || {};
 
     if (typeof isNightLightMode !== "undefined") {
       if (typeof isNightLightMode !== "boolean") {
+        console.warn("[PATCH] Invalid isNightLightMode:", isNightLightMode);
         return res.status(400).json({ error: { code: "BAD_INPUT", message: "isNightLightMode must be boolean" } });
       }
       state.isNightLightMode = isNightLightMode;
@@ -95,6 +105,7 @@ app.patch("/state", (req, res) => {
     if (typeof brightness !== "undefined") {
       const b = Number(brightness);
       if (!Number.isFinite(b)) {
+        console.warn("[PATCH] Invalid brightness:", brightness);
         return res.status(400).json({ error: { code: "BAD_INPUT", message: "brightness must be a number" } });
       }
       state.brightness = clamp(Math.round(b), 0, 255);
@@ -103,6 +114,7 @@ app.patch("/state", (req, res) => {
     if (typeof offTimerMs !== "undefined") {
       const t = Number(offTimerMs);
       if (!Number.isFinite(t) || t < 0) {
+        console.warn("[PATCH] Invalid offTimerMs:", offTimerMs);
         return res.status(400).json({ error: { code: "BAD_INPUT", message: "offTimerMs must be >= 0" } });
       }
       state.offTimerMs = Math.round(t);
@@ -112,16 +124,20 @@ app.patch("/state", (req, res) => {
 
     state.updatedAt = new Date().toISOString();
     saveState(state);
+    console.log("[PATCH] Updated state:", state);
     return res.json(state);
   } catch (err) {
+    console.error("[PATCH] Server error:", err);
     return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
   }
 });
 
 app.post("/command", (req, res) => {
+  console.log("[REQ] POST /command with body:", req.body);
   try {
     const action = req.body?.action;
     if (!["LED_ON", "LED_OFF", "REBOOT"].includes(action)) {
+      console.warn("[COMMAND] Invalid action:", action);
       return res.status(400).json({
         error: { code: "BAD_INPUT", message: 'action must be "LED_ON" | "LED_OFF" | "REBOOT"' },
       });
@@ -136,14 +152,17 @@ app.post("/command", (req, res) => {
     }
 
     tickTelemetry();
+    console.log("[COMMAND] Executed action:", action, "-> state:", state);
     return res.json({ ok: true, state });
   } catch (err) {
+    console.error("[COMMAND] Server error:", err);
     return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
   }
 });
 
 // Root
 app.get("/", (_req, res) => {
+  console.log("[REQ] GET /");
   res.type("text/plain").send(
     [
       "Lumipoint API (Express + JSON file persistence on Railway)",

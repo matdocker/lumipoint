@@ -33,7 +33,7 @@ type DeviceState = {
   updatedAt?: string; // ISO timestamp
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "lumipoint-production.up.railway.app";
 const DEVICE_URL = process.env.NEXT_PUBLIC_DEVICE_URL || ""; // ESP32 endpoint
 
 function msToLabel(ms: number) {
@@ -76,11 +76,13 @@ export default function LumipointDashboard() {
 
     async function fetchState() {
       if (!apiBase) return;
+      console.log("[FETCH] Requesting state from backend:", `${apiBase}/state`);
       try {
         const res = await fetch(`${apiBase}/state`, { cache: "no-store" });
         if (!res.ok) throw new Error(`GET /state ${res.status}`);
         const data: DeviceState = await res.json();
         if (cancelled) return;
+        console.log("[FETCH] Success:", data);
         setDevice(data);
         setIsNight(Boolean(data.isNightLightMode));
         setBrightness(Number(data.brightness ?? 120));
@@ -88,6 +90,7 @@ export default function LumipointDashboard() {
         setError(null);
       } catch (err: any) {
         if (cancelled) return;
+        console.error("[FETCH] Failed:", err);
         setError(err?.message || "Failed to fetch state");
       } finally {
         if (!cancelled) setLoading(false);
@@ -112,7 +115,7 @@ export default function LumipointDashboard() {
       try {
         lastSavedRef.current = snapshot;
 
-        // Update backend state
+        console.log("[SAVE] Sending update to backend:", payload);
         const res = await fetch(`${apiBase}/state`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -120,20 +123,23 @@ export default function LumipointDashboard() {
         });
         if (!res.ok) throw new Error(`PATCH /state ${res.status}`);
         const updated = await res.json();
-        setDevice(updated); // sync UI with backend
+        console.log("[SAVE] Backend updated state:", updated);
+        setDevice(updated);
         setError(null);
 
         // Push updated state to ESP32 (if reachable)
         if (DEVICE_URL) {
+          console.log("[SAVE] Forwarding update to ESP32:", DEVICE_URL);
           await fetch(`${DEVICE_URL}/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(updated),
           }).catch(() => {
-            console.warn("ESP32 not reachable");
+            console.warn("[SAVE] ESP32 not reachable");
           });
         }
       } catch (err: any) {
+        console.error("[SAVE] Failed:", err);
         setError(err?.message || "Failed to save settings");
       }
     }
@@ -163,6 +169,7 @@ export default function LumipointDashboard() {
   // --- Send command (backend + ESP32) ---
   async function sendCommand(action: "LED_ON" | "LED_OFF" | "REBOOT") {
     if (!apiBase) return;
+    console.log("[COMMAND] Sending command:", action);
     try {
       // Update backend
       const res = await fetch(`${apiBase}/command`, {
@@ -172,20 +179,23 @@ export default function LumipointDashboard() {
       });
       if (!res.ok) throw new Error(`POST /command ${res.status}`);
       const updated = await res.json();
+      console.log("[COMMAND] Backend acknowledged:", updated);
       setDevice(updated.state);
       setError(null);
 
       // Push same command to ESP32
       if (DEVICE_URL) {
+        console.log("[COMMAND] Forwarding command to ESP32:", action);
         await fetch(`${DEVICE_URL}/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action }),
         }).catch(() => {
-          console.warn("ESP32 not reachable");
+          console.warn("[COMMAND] ESP32 not reachable");
         });
       }
     } catch (err: any) {
+      console.error("[COMMAND] Failed:", err);
       setError(err?.message || "Command failed");
     }
   }
@@ -235,7 +245,10 @@ export default function LumipointDashboard() {
                     </Group>
                     <Switch
                       checked={isNight}
-                      onChange={(e) => setIsNight(e.currentTarget.checked)}
+                      onChange={(e) => {
+                        console.log("[UI] Night-light mode toggled:", e.currentTarget.checked);
+                        setIsNight(e.currentTarget.checked);
+                      }}
                       onLabel="On"
                       offLabel="Off"
                       size="md"
@@ -257,7 +270,16 @@ export default function LumipointDashboard() {
                       {brightness}
                     </Badge>
                   </Group>
-                  <Slider value={brightness} min={0} max={255} step={1} onChange={setBrightness} />
+                  <Slider
+                    value={brightness}
+                    min={0}
+                    max={255}
+                    step={1}
+                    onChange={(val) => {
+                      console.log("[UI] Brightness slider moved:", val);
+                      setBrightness(val);
+                    }}
+                  />
 
                   <Divider />
 
@@ -268,7 +290,10 @@ export default function LumipointDashboard() {
                   <Select
                     data={timerOptions.map((ms) => ({ value: String(ms), label: msToLabel(ms) }))}
                     value={String(offTimerMs)}
-                    onChange={(v) => v && setOffTimerMs(Number(v))}
+                    onChange={(v) => {
+                      console.log("[UI] Auto-off timer set:", v);
+                      v && setOffTimerMs(Number(v));
+                    }}
                     allowDeselect={false}
                   />
                 </Stack>
@@ -293,7 +318,10 @@ export default function LumipointDashboard() {
                     </Button>
                     <Button
                       variant="default"
-                      onClick={() => setPollMs((m) => Math.max(1000, m - 500))}
+                      onClick={() => {
+                        console.log("[UI] Faster refresh clicked");
+                        setPollMs((m) => Math.max(1000, m - 500));
+                      }}
                     >
                       Faster refresh
                     </Button>
@@ -343,7 +371,10 @@ export default function LumipointDashboard() {
                         label: msToLabel(ms),
                       }))}
                       value={String(pollMs)}
-                      onChange={(v) => v && setPollMs(Number(v))}
+                      onChange={(v) => {
+                        console.log("[UI] Telemetry refresh interval set:", v);
+                        v && setPollMs(Number(v));
+                      }}
                       allowDeselect={false}
                     />
                   </Group>
@@ -373,11 +404,20 @@ export default function LumipointDashboard() {
                   <Group gap="sm" wrap="wrap">
                     <TextInput
                       value={apiBase}
-                      onChange={(e) => setApiBase(e.currentTarget.value)}
+                      onChange={(e) => {
+                        console.log("[UI] API base URL changed:", e.currentTarget.value);
+                        setApiBase(e.currentTarget.value);
+                      }}
                       placeholder="http://localhost:3001"
                       w={{ base: "100%", sm: 360 }}
                     />
-                    <Button variant="outline" onClick={() => setApiBase("")}>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        console.log("[UI] API base URL cleared");
+                        setApiBase("");
+                      }}
+                    >
                       Clear
                     </Button>
                   </Group>
