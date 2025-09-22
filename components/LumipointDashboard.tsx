@@ -8,7 +8,6 @@ import {
   Container,
   Divider,
   Group,
-  Select,
   SimpleGrid,
   Slider,
   Stack,
@@ -36,15 +35,6 @@ type DeviceState = {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "https://lumipoint-production.up.railway.app";
 const DEVICE_URL = process.env.NEXT_PUBLIC_DEVICE_URL || ""; // ESP32 endpoint
-
-function msToLabel(ms: number) {
-  if (ms < 1000) return `${ms} ms`;
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  return rs ? `${m}m ${rs}s` : `${m}m`;
-}
 
 function useDebounced<T>(value: T, delay = 400) {
   const [debounced, setDebounced] = useState(value);
@@ -129,7 +119,6 @@ export default function LumipointDashboard() {
         setDevice(updated);
         setError(null);
 
-        // Push updated state to ESP32 (if reachable)
         if (DEVICE_URL) {
           console.log("[SAVE] Forwarding update to ESP32:", DEVICE_URL);
           await fetch(`${DEVICE_URL}/update`, {
@@ -285,18 +274,7 @@ export default function LumipointDashboard() {
                     <Timer size={16} />
                     <Text fw={600}>Auto-off timer</Text>
                   </Group>
-                  <Select
-                    data={[2000, 5000, 10000, 30000, 60000].map((ms) => ({
-                      value: String(ms),
-                      label: msToLabel(ms),
-                    }))}
-                    value={String(offTimerMs)}
-                    onChange={(v) => {
-                      console.log("[UI] Auto-off timer changed:", v);
-                      v && setOffTimerMs(Number(v));
-                    }}
-                    allowDeselect={false}
-                  />
+                  <Text>{offTimerMs} ms</Text>
                 </Stack>
               </Card>
 
