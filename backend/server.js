@@ -1,14 +1,17 @@
 // server.js
-// One-page Express backend for Lumipoint (Railway-ready)
+// Express backend for Lumipoint with Redis persistence (Railway-ready)
 
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { createClient } from "redis";
+
 dotenv.config();
 
 // Configuration
 const PORT = Number(process.env.PORT || 3001);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*"; // set to your vercel domain for stricter CORS
+const REDIS_URL = process.env.REDIS_URL; // Railway Redis URL
 
 const app = express();
 app.use(express.json());
@@ -19,8 +22,15 @@ app.use(
   })
 );
 
-// ---- In-memory state (mock device) ----
-let state = {
+// ---- Redis Setup ----
+const redis = createClient({ url: REDIS_URL });
+redis.on("error", (err) => console.error("Redis Client Error", err));
+await redis.connect();
+
+const STATE_KEY = "lumipoint:state";
+
+// ---- Default state ----
+const defaultState = {
   isNightLightMode: false,
   brightness: 120,     // 0..255
   offTimerMs: 5000,    // >= 0
@@ -31,10 +41,22 @@ let state = {
   updatedAt: new Date().toISOString(),
 };
 
-// Small helper: clamp numbers
+// ---- State helpers ----
+async function loadState() {
+  const raw = await redis.get(STATE_KEY);
+  return raw ? JSON.parse(raw) : { ...defaultState };
+}
+
+async function saveState(state) {
+  await redis.set(STATE_KEY, JSON.stringify(state));
+}
+
+let state = await loadState();
+
+// ---- Small helper: clamp numbers ----
 const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
 
-// Simulate telemetry drift on each read to make it feel alive
+// ---- Simulate telemetry drift ----
 function tickTelemetry() {
   const drift = () => (Math.random() - 0.5) * 0.8;
   state.lux = Math.max(0, Number((state.lux + drift()).toFixed(2)));
@@ -49,13 +71,14 @@ function tickTelemetry() {
 app.get("/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // Read full state
-app.get("/state", (_req, res) => {
+app.get("/state", async (_req, res) => {
   tickTelemetry();
+  await saveState(state);
   res.json(state);
 });
 
 // Partial update: { isNightLightMode?, brightness?, offTimerMs? }
-app.patch("/state", (req, res) => {
+app.patch("/state", async (req, res) => {
   try {
     const { isNightLightMode, brightness, offTimerMs } = req.body || {};
 
@@ -82,10 +105,10 @@ app.patch("/state", (req, res) => {
       state.offTimerMs = Math.round(t);
     }
 
-    // Optional: reflect LED state if in night mode
     if (state.isNightLightMode) state.ledOn = true;
 
     state.updatedAt = new Date().toISOString();
+    await saveState(state);
     return res.json(state);
   } catch (err) {
     return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
@@ -93,7 +116,7 @@ app.patch("/state", (req, res) => {
 });
 
 // Immediate commands: { action: "LED_ON" | "LED_OFF" | "REBOOT" }
-app.post("/command", (req, res) => {
+app.post("/command", async (req, res) => {
   try {
     const action = req.body?.action;
     if (!["LED_ON", "LED_OFF", "REBOOT"].includes(action)) {
@@ -105,14 +128,13 @@ app.post("/command", (req, res) => {
     if (action === "LED_ON") state.ledOn = true;
     if (action === "LED_OFF") state.ledOn = false;
     if (action === "REBOOT") {
-      // Simulate fast reboot: reset runtime flags but keep user settings
       state.ledOn = false;
       state.motion = false;
       state.updatedAt = new Date().toISOString();
     }
 
-    // Nudge telemetry and update timestamp
     tickTelemetry();
+    await saveState(state);
     return res.json({ ok: true, state });
   } catch (err) {
     return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
@@ -123,12 +145,13 @@ app.post("/command", (req, res) => {
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
     [
-      "Lumipoint API (Express on Railway)",
+      "Lumipoint API (Express + Redis on Railway)",
       "GET    /health",
       "GET    /state",
       "PATCH  /state      { isNightLightMode?, brightness?, offTimerMs? }",
       'POST   /command    { action: "LED_ON"|"LED_OFF"|"REBOOT" }',
       "",
+      "Uses Redis persistence (REDIS_URL env required).",
       "Set CORS_ORIGIN env (comma-separated) to restrict cross-origin access.",
     ].join("\n")
   );
