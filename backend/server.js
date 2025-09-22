@@ -11,13 +11,25 @@ dotenv.config();
 
 // Configuration
 const PORT = Number(process.env.PORT || 3001);
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "https://lumipoint.vercel.app/"; // set to your vercel domain(s) for stricter CORS
+const rawOrigins = (process.env.CORS_ORIGIN || "https://lumipoint.vercel.app")
+  .split(",")
+  .map((s) => s.trim().replace(/\/$/, "")); // strip trailing slashes
+const ALLOWED_ORIGINS = rawOrigins.length ? rawOrigins : ["*"];
 
 const app = express();
 app.use(express.json());
+
+// CORS middleware (for REST endpoints)
 app.use(
   cors({
-    origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN.split(",").map((s) => s.trim()),
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow non-browser tools
+      if (ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin)) {
+        return callback(null, true);
+      }
+      console.warn("[CORS] Blocked request from origin:", origin);
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: false,
   })
 );
@@ -70,15 +82,16 @@ let clients = [];
 app.get("/events", (req, res) => {
   console.log("[SSE] Client connecting...");
 
-  const allowedOrigins = CORS_ORIGIN.split(",").map((s) => s.trim());
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes("*")) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  } else if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin); // ✅ reflect only the requester
+  const origin = req.headers.origin?.replace(/\/$/, "");
+  if (origin && (ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin))) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    console.warn("[SSE] Origin not allowed:", origin);
+    res.status(403).end();
+    return;
   }
 
+  // Required headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -224,7 +237,7 @@ app.get("/", (_req, res) => {
       "GET    /events     (SSE stream of live state)",
       "",
       "State is saved in lumipoint-state.json inside the container.",
-      "Set CORS_ORIGIN env (comma-separated) to restrict cross-origin access.",
+      "Set CORS_ORIGIN env (comma-separated, no trailing slashes) to restrict cross-origin access.",
     ].join("\n")
   );
 });
