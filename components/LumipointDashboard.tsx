@@ -225,9 +225,9 @@ export default function LumipointDashboard() {
         {/* Header */}
         <Group justify="space-between" align="center" wrap="wrap" gap="md">
           <Stack gap={4}>
-            <Title order={2}>Lumipoint Dashboard</Title>
+            <Title order={2}>Smart-Outlet Dashboard</Title>
             <Text c="dimmed" size="sm">
-              Control & telemetry for your nightlight outlet.
+              Control & telemetry for ECTE250 smart outlet.
             </Text>
           </Stack>
           <Group wrap="wrap" gap="sm" align="center">
@@ -288,13 +288,6 @@ export default function LumipointDashboard() {
                     allowDeselect={false}
                   />
 
-                  <Divider />
-
-                  <Group gap={8}>
-                    <Sun size={16} />
-                    <Text fw={600}>Lux threshold</Text>
-                  </Group>
-                  <Slider value={luxThreshold} min={0} max={1000} step={10} onChange={setLuxThreshold} />
                 </Stack>
               </Card>
 
@@ -375,12 +368,11 @@ export default function LumipointDashboard() {
                 <Divider />
 
                 <Stack gap={6}>
-                  <Text fw={600}>Lux configuration</Text>
-                  <NumberInput
-                    label="Lux threshold"
-                    value={luxThreshold}
-                    onChange={(val) => setLuxThreshold(Number(val))}
-                  />
+                   <Group gap={8}>
+                    <Sun size={16} />
+                    <Text fw={600}>Lux threshold</Text>
+                  </Group>
+                  <Slider value={luxThreshold} min={0} max={1000} step={10} onChange={setLuxThreshold} />
                 </Stack>
 
                 <Divider />
