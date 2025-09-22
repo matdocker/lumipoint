@@ -11,7 +11,7 @@ dotenv.config();
 
 // Configuration
 const PORT = Number(process.env.PORT || 3001);
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "*"; // set to your vercel domain for stricter CORS
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "https://lumipoint.vercel.app/"; // set to your vercel domain(s) for stricter CORS
 
 const app = express();
 app.use(express.json());
@@ -70,11 +70,18 @@ let clients = [];
 app.get("/events", (req, res) => {
   console.log("[SSE] Client connecting...");
 
-  // Important: set headers manually for SSE + CORS
+  const allowedOrigins = CORS_ORIGIN.split(",").map((s) => s.trim());
+  const origin = req.headers.origin;
+
+  if (allowedOrigins.includes("*")) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin); // ✅ reflect only the requester
+  }
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("Access-Control-Allow-Origin", CORS_ORIGIN === "*" ? "*" : CORS_ORIGIN);
 
   res.flushHeaders();
 

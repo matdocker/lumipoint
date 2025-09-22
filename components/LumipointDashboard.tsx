@@ -62,38 +62,61 @@ export default function LumipointDashboard() {
   );
   const lastSavedRef = useRef<string>("");
 
-  // --- Listen to SSE stream ---
+  // --- Listen to SSE stream with auto-reconnect ---
   useEffect(() => {
     if (!apiBase) return;
-    const url = `${apiBase}/events`;
-    console.log("[SSE] Connecting to:", url);
 
-    const evtSource = new EventSource(url);
+    let retryDelay = 1000; // start at 1s
+    let evtSource: EventSource | null = null;
+    let closed = false;
 
-    evtSource.onmessage = (event) => {
-      try {
-        const data: DeviceState = JSON.parse(event.data);
-        console.log("[SSE] Received update:", data);
-        setDevice(data);
-        setIsNight(Boolean(data.isNightLightMode));
-        setBrightness(Number(data.brightness ?? 120));
-        setOffTimerMs(Number(data.offTimerMs ?? 5000));
+    const connect = () => {
+      const url = `${apiBase}/events`;
+      console.log("[SSE] Connecting to:", url);
+
+      evtSource = new EventSource(url);
+
+      evtSource.onopen = () => {
+        console.log("[SSE] Connected");
+        retryDelay = 1000; // reset backoff
         setError(null);
+      };
+
+      evtSource.onmessage = (event) => {
+        try {
+          const data: DeviceState = JSON.parse(event.data);
+          console.log("[SSE] Received update:", data);
+          setDevice(data);
+          setIsNight(Boolean(data.isNightLightMode));
+          setBrightness(Number(data.brightness ?? 120));
+          setOffTimerMs(Number(data.offTimerMs ?? 5000));
+          setError(null);
+          setLoading(false);
+        } catch (err) {
+          console.error("[SSE] Failed to parse event:", err, event.data);
+        }
+      };
+
+      evtSource.onerror = (err) => {
+        console.error("[SSE] Connection error:", err);
+        setError("SSE connection lost");
         setLoading(false);
-      } catch (err) {
-        console.error("[SSE] Failed to parse event:", err, event.data);
-      }
+        evtSource?.close();
+
+        if (!closed) {
+          console.log(`[SSE] Reconnecting in ${retryDelay / 1000}s...`);
+          setTimeout(connect, retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 30000); // exponential backoff up to 30s
+        }
+      };
     };
 
-    evtSource.onerror = (err) => {
-      console.error("[SSE] Connection error:", err);
-      setError("SSE connection lost");
-      setLoading(false);
-    };
+    connect();
 
     return () => {
+      closed = true;
       console.log("[SSE] Closing connection");
-      evtSource.close();
+      evtSource?.close();
     };
   }, [apiBase]);
 
