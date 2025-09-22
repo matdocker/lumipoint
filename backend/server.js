@@ -68,14 +68,18 @@ let state = loadState();
 let clients = [];
 
 app.get("/events", (req, res) => {
+  console.log("[SSE] Client connecting...");
+
+  // Important: set headers manually for SSE + CORS
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", CORS_ORIGIN === "*" ? "*" : CORS_ORIGIN);
+
   res.flushHeaders();
 
-  console.log("[SSE] Client connected");
-
   clients.push(res);
+  console.log("[SSE] Client connected. Total:", clients.length);
 
   // Send initial state
   res.write(`data: ${JSON.stringify(state)}\n\n`);
