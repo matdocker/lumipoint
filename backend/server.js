@@ -1,17 +1,17 @@
 // server.js
-// Express backend for Lumipoint with Redis persistence (Railway-ready)
+// Express backend for Lumipoint with JSON file persistence (Railway-ready)
 
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { createClient } from "redis";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
 
 // Configuration
 const PORT = Number(process.env.PORT || 3001);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*"; // set to your vercel domain for stricter CORS
-const REDIS_URL = process.env.REDIS_URL; // Railway Redis URL
 
 const app = express();
 app.use(express.json());
@@ -22,14 +22,10 @@ app.use(
   })
 );
 
-// ---- Redis Setup ----
-const redis = createClient({ url: REDIS_URL });
-redis.on("error", (err) => console.error("Redis Client Error", err));
-await redis.connect();
+// ---- Persistence Setup ----
+const STATE_FILE = path.join(process.cwd(), "lumipoint-state.json");
 
-const STATE_KEY = "lumipoint:state";
-
-// ---- Default state ----
+// Default state
 const defaultState = {
   isNightLightMode: false,
   brightness: 120,     // 0..255
@@ -41,44 +37,51 @@ const defaultState = {
   updatedAt: new Date().toISOString(),
 };
 
-// ---- State helpers ----
-async function loadState() {
-  const raw = await redis.get(STATE_KEY);
-  return raw ? JSON.parse(raw) : { ...defaultState };
+// Load state from file (or fallback to default)
+function loadState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      const raw = fs.readFileSync(STATE_FILE, "utf8");
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error("Failed to load state file:", err);
+  }
+  return { ...defaultState };
 }
 
-async function saveState(state) {
-  await redis.set(STATE_KEY, JSON.stringify(state));
+// Save state to file
+function saveState(state) {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.error("Failed to save state file:", err);
+  }
 }
 
-let state = await loadState();
+let state = loadState();
 
-// ---- Small helper: clamp numbers ----
+// ---- Helpers ----
 const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
 
-// ---- Simulate telemetry drift ----
 function tickTelemetry() {
   const drift = () => (Math.random() - 0.5) * 0.8;
   state.lux = Math.max(0, Number((state.lux + drift()).toFixed(2)));
   state.adc = Math.max(0, Math.round(state.adc + (Math.random() - 0.5) * 2));
-  if (Math.random() < 0.05) state.motion = !state.motion; // flip sometimes
+  if (Math.random() < 0.05) state.motion = !state.motion;
   state.updatedAt = new Date().toISOString();
+  saveState(state);
 }
 
 // ---- Routes ----
-
-// Health
 app.get("/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// Read full state
-app.get("/state", async (_req, res) => {
+app.get("/state", (_req, res) => {
   tickTelemetry();
-  await saveState(state);
   res.json(state);
 });
 
-// Partial update: { isNightLightMode?, brightness?, offTimerMs? }
-app.patch("/state", async (req, res) => {
+app.patch("/state", (req, res) => {
   try {
     const { isNightLightMode, brightness, offTimerMs } = req.body || {};
 
@@ -108,15 +111,14 @@ app.patch("/state", async (req, res) => {
     if (state.isNightLightMode) state.ledOn = true;
 
     state.updatedAt = new Date().toISOString();
-    await saveState(state);
+    saveState(state);
     return res.json(state);
   } catch (err) {
     return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
   }
 });
 
-// Immediate commands: { action: "LED_ON" | "LED_OFF" | "REBOOT" }
-app.post("/command", async (req, res) => {
+app.post("/command", (req, res) => {
   try {
     const action = req.body?.action;
     if (!["LED_ON", "LED_OFF", "REBOOT"].includes(action)) {
@@ -134,7 +136,6 @@ app.post("/command", async (req, res) => {
     }
 
     tickTelemetry();
-    await saveState(state);
     return res.json({ ok: true, state });
   } catch (err) {
     return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
@@ -145,13 +146,13 @@ app.post("/command", async (req, res) => {
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
     [
-      "Lumipoint API (Express + Redis on Railway)",
+      "Lumipoint API (Express + JSON file persistence on Railway)",
       "GET    /health",
       "GET    /state",
       "PATCH  /state      { isNightLightMode?, brightness?, offTimerMs? }",
       'POST   /command    { action: "LED_ON"|"LED_OFF"|"REBOOT" }',
       "",
-      "Uses Redis persistence (REDIS_URL env required).",
+      "State is saved in lumipoint-state.json inside the container.",
       "Set CORS_ORIGIN env (comma-separated) to restrict cross-origin access.",
     ].join("\n")
   );

@@ -112,7 +112,7 @@ export default function LumipointDashboard() {
       try {
         lastSavedRef.current = snapshot;
 
-        // Update backend (Redis persistence)
+        // Update backend state
         const res = await fetch(`${apiBase}/state`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -123,7 +123,7 @@ export default function LumipointDashboard() {
         setDevice(updated); // sync UI with backend
         setError(null);
 
-        // Push updated state to ESP32
+        // Push updated state to ESP32 (if reachable)
         if (DEVICE_URL) {
           await fetch(`${DEVICE_URL}/update`, {
             method: "POST",
@@ -211,7 +211,6 @@ export default function LumipointDashboard() {
           </Stack>
 
           <Group wrap="wrap" gap="sm" align="center">
-            {/* Keep override hidden for now */}
             {connectionBadge}
           </Group>
         </Group>
