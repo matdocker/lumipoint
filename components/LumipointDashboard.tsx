@@ -18,6 +18,8 @@ import {
   Title,
   Paper,
   rem,
+  Select,
+  NumberInput,
 } from "@mantine/core";
 import { AlertCircle, CheckCircle2, Loader2, Moon, Power, Sun, Timer, Zap } from "lucide-react";
 
@@ -29,6 +31,9 @@ type DeviceState = {
   lux: number; // estimated ambient lux
   adc: number; // raw ADC from LDR
   motion: boolean; // PIR state
+  luxThreshold: number; // threshold for dark vs light
+  sensitivityNight: number; // PIR sensitivity in night-light mode
+  sensitivityNormal: number; // PIR sensitivity in normal mode
   updatedAt?: string; // ISO timestamp
 };
 
@@ -55,41 +60,53 @@ export default function LumipointDashboard() {
   const [isNight, setIsNight] = useState(false);
   const [brightness, setBrightness] = useState(120);
   const [offTimerMs, setOffTimerMs] = useState(5000);
+  const [luxThreshold, setLuxThreshold] = useState(50);
+  const [sensitivityNight, setSensitivityNight] = useState(5);
+  const [sensitivityNormal, setSensitivityNormal] = useState(5);
 
   const debouncedPayload = useDebounced(
-    { isNightLightMode: isNight, brightness, offTimerMs },
+    { isNightLightMode: isNight, brightness, offTimerMs, luxThreshold, sensitivityNight, sensitivityNormal },
     500
   );
   const lastSavedRef = useRef<string>("");
+
+  const timerOptions = [2000, 5000, 10000, 30000, 60000, 120000, 300000, 600000];
+  const msToLabel = (ms: number) => {
+    if (ms < 1000) return `${ms} ms`;
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    return rs ? `${m}m ${rs}s` : `${m}m`;
+  };
 
   // --- Listen to SSE stream with auto-reconnect ---
   useEffect(() => {
     if (!apiBase) return;
 
-    let retryDelay = 1000; // start at 1s
+    let retryDelay = 1000;
     let evtSource: EventSource | null = null;
     let closed = false;
 
     const connect = () => {
       const url = `${apiBase}/events`;
-      console.log("[SSE] Connecting to:", url);
-
       evtSource = new EventSource(url);
 
       evtSource.onopen = () => {
-        console.log("[SSE] Connected");
-        retryDelay = 1000; // reset backoff
+        retryDelay = 1000;
         setError(null);
       };
 
       evtSource.onmessage = (event) => {
         try {
           const data: DeviceState = JSON.parse(event.data);
-          console.log("[SSE] Received update:", data);
           setDevice(data);
           setIsNight(Boolean(data.isNightLightMode));
           setBrightness(Number(data.brightness ?? 120));
           setOffTimerMs(Number(data.offTimerMs ?? 5000));
+          setLuxThreshold(Number(data.luxThreshold ?? 50));
+          setSensitivityNight(Number(data.sensitivityNight ?? 5));
+          setSensitivityNormal(Number(data.sensitivityNormal ?? 5));
           setError(null);
           setLoading(false);
         } catch (err) {
@@ -97,16 +114,13 @@ export default function LumipointDashboard() {
         }
       };
 
-      evtSource.onerror = (err) => {
-        console.error("[SSE] Connection error:", err);
+      evtSource.onerror = () => {
         setError("SSE connection lost");
         setLoading(false);
         evtSource?.close();
-
         if (!closed) {
-          console.log(`[SSE] Reconnecting in ${retryDelay / 1000}s...`);
           setTimeout(connect, retryDelay);
-          retryDelay = Math.min(retryDelay * 2, 30000); // exponential backoff up to 30s
+          retryDelay = Math.min(retryDelay * 2, 30000);
         }
       };
     };
@@ -115,7 +129,6 @@ export default function LumipointDashboard() {
 
     return () => {
       closed = true;
-      console.log("[SSE] Closing connection");
       evtSource?.close();
     };
   }, [apiBase]);
@@ -130,7 +143,6 @@ export default function LumipointDashboard() {
       try {
         lastSavedRef.current = snapshot;
 
-        console.log("[SAVE] Sending PATCH to backend:", payload);
         const res = await fetch(`${apiBase}/state`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -138,22 +150,17 @@ export default function LumipointDashboard() {
         });
         if (!res.ok) throw new Error(`PATCH /state ${res.status}`);
         const updated = await res.json();
-        console.log("[SAVE] Backend confirmed update:", updated);
         setDevice(updated);
         setError(null);
 
         if (DEVICE_URL) {
-          console.log("[SAVE] Forwarding update to ESP32:", DEVICE_URL);
           await fetch(`${DEVICE_URL}/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(updated),
-          }).catch(() => {
-            console.warn("[SAVE] ESP32 not reachable");
-          });
+          }).catch(() => console.warn("[SAVE] ESP32 not reachable"));
         }
       } catch (err: any) {
-        console.error("[SAVE] Failed:", err);
         setError(err?.message || "Failed to save settings");
       }
     }
@@ -163,11 +170,7 @@ export default function LumipointDashboard() {
   const connectionBadge = useMemo(() => {
     if (loading)
       return (
-        <Badge
-          variant="light"
-          color="gray"
-          leftSection={<Loader2 size={14} className="animate-spin" />}
-        >
+        <Badge variant="light" color="gray" leftSection={<Loader2 size={14} className="animate-spin" />}>
           Connecting…
         </Badge>
       );
@@ -187,7 +190,6 @@ export default function LumipointDashboard() {
   // --- Send command (backend + ESP32) ---
   async function sendCommand(action: "LED_ON" | "LED_OFF" | "REBOOT") {
     if (!apiBase) return;
-    console.log("[COMMAND] Sending:", action);
     try {
       const res = await fetch(`${apiBase}/command`, {
         method: "POST",
@@ -196,22 +198,17 @@ export default function LumipointDashboard() {
       });
       if (!res.ok) throw new Error(`POST /command ${res.status}`);
       const updated = await res.json();
-      console.log("[COMMAND] Backend responded:", updated);
       setDevice(updated.state);
       setError(null);
 
       if (DEVICE_URL) {
-        console.log("[COMMAND] Forwarding to ESP32:", action);
         await fetch(`${DEVICE_URL}/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action }),
-        }).catch(() => {
-          console.warn("[COMMAND] ESP32 not reachable");
-        });
+        }).catch(() => console.warn("[COMMAND] ESP32 not reachable"));
       }
     } catch (err: any) {
-      console.error("[COMMAND] Failed:", err);
       setError(err?.message || "Command failed");
     }
   }
@@ -249,7 +246,6 @@ export default function LumipointDashboard() {
           {/* Controls Tab */}
           <Tabs.Panel value="controls" pt="lg">
             <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
-              {/* Mode / Brightness / Timer */}
               <Card withBorder padding="lg" shadow="sm">
                 <Stack gap="md">
                   <Group justify="space-between">
@@ -259,10 +255,7 @@ export default function LumipointDashboard() {
                     </Group>
                     <Switch
                       checked={isNight}
-                      onChange={(e) => {
-                        console.log("[UI] Night-light toggled:", e.currentTarget.checked);
-                        setIsNight(e.currentTarget.checked);
-                      }}
+                      onChange={(e) => setIsNight(e.currentTarget.checked)}
                       onLabel="On"
                       offLabel="Off"
                       size="md"
@@ -280,16 +273,7 @@ export default function LumipointDashboard() {
                       {brightness}
                     </Badge>
                   </Group>
-                  <Slider
-                    value={brightness}
-                    min={0}
-                    max={255}
-                    step={1}
-                    onChange={(val) => {
-                      console.log("[UI] Brightness slider:", val);
-                      setBrightness(val);
-                    }}
-                  />
+                  <Slider value={brightness} min={0} max={255} step={1} onChange={setBrightness} />
 
                   <Divider />
 
@@ -297,7 +281,20 @@ export default function LumipointDashboard() {
                     <Timer size={16} />
                     <Text fw={600}>Auto-off timer</Text>
                   </Group>
-                  <Text>{offTimerMs} ms</Text>
+                  <Select
+                    data={timerOptions.map((ms) => ({ value: String(ms), label: msToLabel(ms) }))}
+                    value={String(offTimerMs)}
+                    onChange={(v) => v && setOffTimerMs(Number(v))}
+                    allowDeselect={false}
+                  />
+
+                  <Divider />
+
+                  <Group gap={8}>
+                    <Sun size={16} />
+                    <Text fw={600}>Lux threshold</Text>
+                  </Group>
+                  <Slider value={luxThreshold} min={0} max={1000} step={10} onChange={setLuxThreshold} />
                 </Stack>
               </Card>
 
@@ -330,38 +327,16 @@ export default function LumipointDashboard() {
                     <Text fw={600}>Current status</Text>
                   </Group>
                   <SimpleGrid cols={2} spacing="xs">
-                    <Text c="dimmed" size="sm">
-                      Lux
-                    </Text>
-                    <Text ta="right" size="sm">
-                      {device?.lux?.toFixed?.(2) ?? "—"} lx
-                    </Text>
-                    <Text c="dimmed" size="sm">
-                      ADC
-                    </Text>
-                    <Text ta="right" size="sm">
-                      {device?.adc ?? "—"}
-                    </Text>
-                    <Text c="dimmed" size="sm">
-                      Motion
-                    </Text>
-                    <Text ta="right" size="sm">
-                      {device?.motion ? "Detected" : "None"}
-                    </Text>
-                    <Text c="dimmed" size="sm">
-                      LED
-                    </Text>
-                    <Text ta="right" size="sm">
-                      {device?.ledOn ? "On" : "Off"}
-                    </Text>
-                    <Text c="dimmed" size="sm">
-                      Updated
-                    </Text>
-                    <Text ta="right" size="sm">
-                      {device?.updatedAt
-                        ? new Date(device.updatedAt).toLocaleTimeString()
-                        : "—"}
-                    </Text>
+                    <Text c="dimmed" size="sm">Lux</Text>
+                    <Text ta="right" size="sm">{device?.lux?.toFixed?.(2) ?? "—"} lx</Text>
+                    <Text c="dimmed" size="sm">ADC</Text>
+                    <Text ta="right" size="sm">{device?.adc ?? "—"}</Text>
+                    <Text c="dimmed" size="sm">Motion</Text>
+                    <Text ta="right" size="sm">{device?.motion ? "Detected" : "None"}</Text>
+                    <Text c="dimmed" size="sm">LED</Text>
+                    <Text ta="right" size="sm">{device?.ledOn ? "On" : "Off"}</Text>
+                    <Text c="dimmed" size="sm">Updated</Text>
+                    <Text ta="right" size="sm">{device?.updatedAt ? new Date(device.updatedAt).toLocaleTimeString() : "—"}</Text>
                   </SimpleGrid>
                 </Stack>
               </Card>
@@ -375,14 +350,8 @@ export default function LumipointDashboard() {
                 <Text fw={600}>Live telemetry (via SSE)</Text>
                 <Divider />
                 <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
-                  <Metric
-                    label="Lux"
-                    value={device?.lux != null ? `${device.lux.toFixed(2)} lx` : "—"}
-                  />
-                  <Metric
-                    label="ADC"
-                    value={device?.adc != null ? String(device.adc) : "—"}
-                  />
+                  <Metric label="Lux" value={device?.lux != null ? `${device.lux.toFixed(2)} lx` : "—"} />
+                  <Metric label="ADC" value={device?.adc != null ? String(device.adc) : "—"} />
                   <Metric label="Motion" value={device?.motion ? "Yes" : "No"} />
                   <Metric label="LED" value={device?.ledOn ? "On" : "Off"} />
                 </SimpleGrid>
@@ -395,15 +364,54 @@ export default function LumipointDashboard() {
             <Card withBorder padding="lg" shadow="sm">
               <Stack gap="lg">
                 <Stack gap={6}>
-                  <Text fw={600}>Endpoint</Text>
+                  <Text fw={600}>API Endpoint</Text>
                   <TextInput
                     value={apiBase}
-                    onChange={(e) => {
-                      console.log("[UI] API base changed:", e.currentTarget.value);
-                      setApiBase(e.currentTarget.value);
-                    }}
+                    onChange={(e) => setApiBase(e.currentTarget.value)}
                     placeholder="http://localhost:3001"
                   />
+                </Stack>
+
+                <Divider />
+
+                <Stack gap={6}>
+                  <Text fw={600}>Lux configuration</Text>
+                  <NumberInput
+                    label="Lux threshold"
+                    value={luxThreshold}
+                    onChange={(val) => setLuxThreshold(Number(val))}
+                  />
+                </Stack>
+
+                <Divider />
+
+                <Stack gap={6}>
+                  <Text fw={600}>Sensor sensitivity</Text>
+                  <NumberInput
+                    label="Night-light mode sensitivity"
+                    value={sensitivityNight}
+                    min={1}
+                    max={10}
+                    onChange={(val) => setSensitivityNight(Number(val))}
+                  />
+                  <NumberInput
+                    label="Normal outlet mode sensitivity"
+                    value={sensitivityNormal}
+                    min={1}
+                    max={10}
+                    onChange={(val) => setSensitivityNormal(Number(val))}
+                  />
+                </Stack>
+
+                <Divider />
+
+                <Stack gap={6}>
+                  <Text fw={600}>Danger zone</Text>
+                  <Group gap="sm" wrap="wrap">
+                    <Button color="red" onClick={() => sendCommand("REBOOT")}>Reboot Device</Button>
+                    <Button variant="outline" onClick={() => sendCommand("LED_OFF")}>Force LED Off</Button>
+                    <Button variant="light" onClick={() => sendCommand("LED_ON")}>Force LED On</Button>
+                  </Group>
                 </Stack>
               </Stack>
             </Card>
@@ -421,12 +429,8 @@ export default function LumipointDashboard() {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <Paper withBorder p="md" radius="lg" shadow="xs">
-      <Text size="xs" c="dimmed">
-        {label}
-      </Text>
-      <Text fw={700} fz={rem(18)}>
-        {value}
-      </Text>
+      <Text size="xs" c="dimmed">{label}</Text>
+      <Text fw={700} fz={rem(18)}>{value}</Text>
     </Paper>
   );
 }

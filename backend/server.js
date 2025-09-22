@@ -46,6 +46,9 @@ const defaultState = {
   lux: 12.3,
   adc: 87,
   motion: false,
+  luxThreshold: 50,        // lux threshold for dark/light
+  sensitivityNight: 5,     // sensitivity for night-light mode
+  sensitivityNormal: 5,    // sensitivity for normal mode
   updatedAt: new Date().toISOString(),
 };
 
@@ -91,7 +94,6 @@ app.get("/events", (req, res) => {
     return;
   }
 
-  // Required headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -101,7 +103,6 @@ app.get("/events", (req, res) => {
   clients.push(res);
   console.log("[SSE] Client connected. Total:", clients.length);
 
-  // Send initial state
   res.write(`data: ${JSON.stringify(state)}\n\n`);
 
   req.on("close", () => {
@@ -126,32 +127,32 @@ function tickTelemetry() {
   if (Math.random() < 0.05) state.motion = !state.motion;
   state.updatedAt = new Date().toISOString();
   saveState(state);
-  console.log("[TELEMETRY] State updated:", state);
   broadcastState();
 }
 
 // ---- Routes ----
 app.get("/health", (_req, res) => {
-  console.log("[REQ] GET /health");
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
 app.get("/state", (_req, res) => {
-  console.log("[REQ] GET /state");
-  res.json(state); // no telemetry drift here anymore
+  res.json(state);
 });
 
 app.patch("/state", (req, res) => {
-  console.log("[REQ] PATCH /state with body:", req.body);
   try {
-    const { isNightLightMode, brightness, offTimerMs } = req.body || {};
+    const {
+      isNightLightMode,
+      brightness,
+      offTimerMs,
+      luxThreshold,
+      sensitivityNight,
+      sensitivityNormal,
+    } = req.body || {};
 
     if (typeof isNightLightMode !== "undefined") {
       if (typeof isNightLightMode !== "boolean") {
-        console.warn("[PATCH] Invalid isNightLightMode:", isNightLightMode);
-        return res.status(400).json({
-          error: { code: "BAD_INPUT", message: "isNightLightMode must be boolean" },
-        });
+        return res.status(400).json({ error: { code: "BAD_INPUT", message: "isNightLightMode must be boolean" } });
       }
       state.isNightLightMode = isNightLightMode;
     }
@@ -159,10 +160,7 @@ app.patch("/state", (req, res) => {
     if (typeof brightness !== "undefined") {
       const b = Number(brightness);
       if (!Number.isFinite(b)) {
-        console.warn("[PATCH] Invalid brightness:", brightness);
-        return res.status(400).json({
-          error: { code: "BAD_INPUT", message: "brightness must be a number" },
-        });
+        return res.status(400).json({ error: { code: "BAD_INPUT", message: "brightness must be a number" } });
       }
       state.brightness = clamp(Math.round(b), 0, 255);
     }
@@ -170,38 +168,51 @@ app.patch("/state", (req, res) => {
     if (typeof offTimerMs !== "undefined") {
       const t = Number(offTimerMs);
       if (!Number.isFinite(t) || t < 0) {
-        console.warn("[PATCH] Invalid offTimerMs:", offTimerMs);
-        return res.status(400).json({
-          error: { code: "BAD_INPUT", message: "offTimerMs must be >= 0" },
-        });
+        return res.status(400).json({ error: { code: "BAD_INPUT", message: "offTimerMs must be >= 0" } });
       }
       state.offTimerMs = Math.round(t);
+    }
+
+    if (typeof luxThreshold !== "undefined") {
+      const l = Number(luxThreshold);
+      if (!Number.isFinite(l) || l < 0) {
+        return res.status(400).json({ error: { code: "BAD_INPUT", message: "luxThreshold must be >= 0" } });
+      }
+      state.luxThreshold = Math.round(l);
+    }
+
+    if (typeof sensitivityNight !== "undefined") {
+      const sn = Number(sensitivityNight);
+      if (!Number.isFinite(sn) || sn < 1 || sn > 10) {
+        return res.status(400).json({ error: { code: "BAD_INPUT", message: "sensitivityNight must be between 1–10" } });
+      }
+      state.sensitivityNight = sn;
+    }
+
+    if (typeof sensitivityNormal !== "undefined") {
+      const sn = Number(sensitivityNormal);
+      if (!Number.isFinite(sn) || sn < 1 || sn > 10) {
+        return res.status(400).json({ error: { code: "BAD_INPUT", message: "sensitivityNormal must be between 1–10" } });
+      }
+      state.sensitivityNormal = sn;
     }
 
     if (state.isNightLightMode) state.ledOn = true;
 
     state.updatedAt = new Date().toISOString();
     saveState(state);
-    console.log("[PATCH] Updated state:", state);
     broadcastState();
     return res.json(state);
   } catch (err) {
-    console.error("[PATCH] Server error:", err);
-    return res
-      .status(500)
-      .json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
+    return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
   }
 });
 
 app.post("/command", (req, res) => {
-  console.log("[REQ] POST /command with body:", req.body);
   try {
     const action = req.body?.action;
     if (!["LED_ON", "LED_OFF", "REBOOT"].includes(action)) {
-      console.warn("[COMMAND] Invalid action:", action);
-      return res.status(400).json({
-        error: { code: "BAD_INPUT", message: 'action must be "LED_ON" | "LED_OFF" | "REBOOT"' },
-      });
+      return res.status(400).json({ error: { code: "BAD_INPUT", message: 'action must be "LED_ON" | "LED_OFF" | "REBOOT"' } });
     }
 
     if (action === "LED_ON") state.ledOn = true;
@@ -213,27 +224,22 @@ app.post("/command", (req, res) => {
     }
 
     tickTelemetry();
-    console.log("[COMMAND] Executed action:", action, "-> state:", state);
     broadcastState();
     return res.json({ ok: true, state });
   } catch (err) {
-    console.error("[COMMAND] Server error:", err);
-    return res
-      .status(500)
-      .json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
+    return res.status(500).json({ error: { code: "SERVER_ERROR", message: String(err?.message || err) } });
   }
 });
 
 // Root
 app.get("/", (_req, res) => {
-  console.log("[REQ] GET /");
   res.type("text/plain").send(
     [
       "Lumipoint API (Express + JSON file persistence + SSE on Railway)",
       "GET    /health",
       "GET    /state",
-      "PATCH  /state      { isNightLightMode?, brightness?, offTimerMs? }",
-      'POST   /command    { action: "LED_ON"|"LED_OFF"|"REBOOT" }',
+      "PATCH  /state      { isNightLightMode?, brightness?, offTimerMs?, luxThreshold?, sensitivityNight?, sensitivityNormal? }",
+      'POST   /command    { action: \"LED_ON\"|\"LED_OFF\"|\"REBOOT\" }',
       "GET    /events     (SSE stream of live state)",
       "",
       "State is saved in lumipoint-state.json inside the container.",
