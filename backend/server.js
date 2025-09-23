@@ -85,15 +85,8 @@ let clients = [];
 app.get("/events", (req, res) => {
   console.log("[SSE] Client connecting...");
 
-  const origin = req.headers.origin?.replace(/\/$/, "");
-  if (origin && (ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin))) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    console.warn("[SSE] Origin not allowed:", origin);
-    res.status(403).end();
-    return;
-  }
-
+  // Always allow SSE
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -103,6 +96,10 @@ app.get("/events", (req, res) => {
   clients.push(res);
   console.log("[SSE] Client connected. Total:", clients.length);
 
+  // Tell client to retry after 5 seconds if the connection drops
+  res.write("retry: 5000\n");
+
+  // Send initial state immediately
   res.write(`data: ${JSON.stringify(state)}\n\n`);
 
   req.on("close", () => {
@@ -114,8 +111,14 @@ app.get("/events", (req, res) => {
 function broadcastState() {
   const data = JSON.stringify(state);
   console.log("[SSE] Broadcasting state to", clients.length, "clients:", data);
-  clients.forEach((res) => res.write(`data: ${data}\n\n`));
+
+  // Include retry header once per reconnect cycle
+  clients.forEach((res) => {
+    res.write("retry: 5000\n");
+    res.write(`data: ${data}\n\n`);
+  });
 }
+
 
 // ---- Helpers ----
 const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
